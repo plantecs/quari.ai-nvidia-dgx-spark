@@ -84,8 +84,10 @@ GID_VAL="$(id -g)"
 : "${MAX_WAIT_MINUTES:=240}"   # 4 hours default
 : "${POLL_INTERVAL_SEC:=5}"
 : "${OPENAI_API_BASE:=http://trtllm-gpt-oss-120b:8000/v1}"
-: "${TRT_MAX_SEQ_LEN:=72000}"
-: "${TRT_MAX_NUM_TOKENS:=72000}"
+: "${TRT_MAX_SEQ_LEN:=82000}"
+: "${TRT_MAX_NUM_TOKENS:=84000}"
+# Max prompt size 80000 tokens
+: "${TRT_FREE_MEM_FRACTION:=0.95}"
 
 # -------------------------------------------------------------------
 # ENV FILES
