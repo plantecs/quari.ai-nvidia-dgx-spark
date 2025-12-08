@@ -173,6 +173,9 @@ services:
     gpus: "all"
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: -1
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_TOKENS}
     volumes:
       - ./ollama_data:/root/.ollama
     ports:
@@ -313,6 +316,11 @@ if [[ "${START_NOW}" =~ ^[Yy]$ ]]; then
   # Pull chat + embedding models (long but persistent thanks to volume)
   ensure_ollama_model "${OLLAMA_MODEL}"
   ensure_ollama_model "${OLLAMA_EMBED_MODEL}"
+
+  # Warm up model once to keep it resident (keep_alive = -1)
+  echo "Warming up model '${OLLAMA_MODEL}' (1-token request, keep_alive=-1)..."
+  docker exec ollama curl -s -X POST http://localhost:11434/api/generate \
+    -d "{\"model\":\"${OLLAMA_MODEL}\",\"prompt\":\"hello\",\"stream\":false,\"options\":{\"num_predict\":1,\"keep_alive\":-1}}" >/dev/null || true
 
   echo
   echo "===================================================================="
