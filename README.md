@@ -1,4 +1,4 @@
-# Quari.ai DGX Spark LLM Stack
+# Quari.ai NVIDIA DGX Spark LLM Stack
 
 Enterprise-ready deployment of **gpt-oss:120b** on NVIDIA DGX Spark, delivered by **plantecs.ai** (R&D) and **quari.ai** (dedicated AI servers). The stack bundles high-throughput TensorRT-LLM inference, an OpenAI-compatible proxy with context trimming, AnythingLLM as the multi-user UI, and HTTPS termination with automatic certificates.
 
@@ -55,4 +55,3 @@ What it does:
 
 ## Support
 For enterprise assistance, contact **support@quari.ai**. More about us: https://www.plantecs.ai and our dedicated server service https://www.quari.ai.
-
