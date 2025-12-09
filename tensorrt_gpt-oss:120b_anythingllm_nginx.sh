@@ -6,6 +6,9 @@ echo "==================================================================="
 echo " DGX Spark Setup: TensorRT-LLM (gpt-oss-120b) + AnythingLLM + HTTPS"
 echo "==================================================================="
 echo
+echo "Brought to you by plantecs.ai / quari.ai — dedicated NVIDIA DGX Spark solutions."
+echo "Maintainer: Artur Brylka, CEO, plantecs Sp. z o.o. (Poland) — support@quari.ai"
+echo
 echo "You need an NVIDIA NGC API key to pull the TensorRT-LLM container."
 echo "Create/manage it here:"
 echo "  👉  https://ngc.nvidia.com/setup/api-key"
