@@ -84,8 +84,9 @@ GID_VAL="$(id -g)"
 : "${MAX_WAIT_MINUTES:=240}"   # 4 hours default
 : "${POLL_INTERVAL_SEC:=5}"
 : "${OPENAI_API_BASE:=http://trtllm-gpt-oss-120b:8000/v1}"
-: "${TRT_MAX_SEQ_LEN:=82000}"
-: "${TRT_MAX_NUM_TOKENS:=84000}"
+# Empirische Grenze aus TRT-Log: max attention window 81696 Tokens
+: "${TRT_MAX_SEQ_LEN:=81696}"
+: "${TRT_MAX_NUM_TOKENS:=81696}"
 # Max prompt size 80000 tokens
 : "${TRT_FREE_MEM_FRACTION:=0.95}"
 
@@ -208,7 +209,8 @@ download_vocab "https://openaipublic.blob.core.windows.net/encodings/cl100k_base
 # -------------------------------------------------------------------
 # DOCKER-COMPOSE (TRT-LLM + AnythingLLM + nginx)
 # -------------------------------------------------------------------
-cat > docker-compose.yml <<'EOF'
+# Note: keep this heredoc unquoted so ${TRT_*} values get expanded.
+cat > docker-compose.yml <<EOF
 services:
   trtllm-gpt-oss-120b:
     image: nvcr.io/nvidia/tensorrt-llm/release:spark-single-gpu-dev
@@ -230,7 +232,7 @@ services:
     networks:
       - llm-net
     command: >
-      bash -lc "echo 'Starting trtllm-serve for openai/gpt-oss-120b...' && trtllm-serve openai/gpt-oss-120b --host 0.0.0.0 --port 8000 --backend pytorch --max_batch_size 1 --max_num_tokens ${TRT_MAX_NUM_TOKENS} --max_seq_len ${TRT_MAX_SEQ_LEN}"
+      bash -lc "echo 'Starting trtllm-serve for openai/gpt-oss-120b...' && trtllm-serve openai/gpt-oss-120b --host 0.0.0.0 --port 8000 --backend pytorch --kv_cache_free_gpu_memory_fraction ${TRT_FREE_MEM_FRACTION} --max_batch_size 1 --max_num_tokens ${TRT_MAX_NUM_TOKENS} --max_seq_len ${TRT_MAX_SEQ_LEN}"
 
   anythingllm:
     image: mintplexlabs/anythingllm:latest
