@@ -98,6 +98,7 @@ cat > .env <<EOF
 NGC_API_KEY=${NGC_API_KEY}
 UID=${UID_VAL}
 GID=${GID_VAL}
+HOST_FQDN=${HOST_FQDN}
 EOF
 
 cat > anythingllm.env <<EOF
@@ -122,7 +123,7 @@ echo "Created .env and anythingllm.env"
 # -------------------------------------------------------------------
 # SSL CERT FOR NGINX
 # -------------------------------------------------------------------
-mkdir -p nginx/certs
+mkdir -p nginx/certs nginx/letsencrypt nginx/www
 echo "Generating self-signed TLS certificate..."
 openssl req -x509 -nodes -days 365 \
   -newkey rsa:4096 \
@@ -158,16 +159,20 @@ http {
     # HTTPS reverse proxy to AnythingLLM
     server {
         listen 443 ssl;
-        server_name ${HOST_FQDN};
+    server_name ${HOST_FQDN};
 
-        ssl_certificate     /etc/nginx/certs/anythingllm.crt;
-        ssl_certificate_key /etc/nginx/certs/anythingllm.key;
+    ssl_certificate     /etc/nginx/certs/anythingllm.crt;
+    ssl_certificate_key /etc/nginx/certs/anythingllm.key;
 
-        ssl_protocols       TLSv1.2 TLSv1.3;
-        ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
 
-        location / {
-            proxy_pass http://anythingllm:3001;
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        proxy_pass http://anythingllm:3001;
             proxy_http_version 1.1;
 
             proxy_set_header Host \$host;
@@ -385,9 +390,37 @@ services:
       MAX_TOKENS: 2000
       PROXY_API_KEY: tensorrt_llm
     volumes:
-      - ./proxy_app.py:/app/proxy_app.py:ro
+      - ./proxy/proxy_app.py:/app/proxy_app.py:ro
     working_dir: /app
     command: bash -lc "pip install --no-cache-dir fastapi uvicorn tiktoken requests && uvicorn proxy_app:app --host 0.0.0.0 --port 7000"
+    networks:
+      - llm-net
+
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    restart: unless-stopped
+    environment:
+      HOST_FQDN: ${HOST_FQDN}
+    volumes:
+      - ./nginx/letsencrypt:/etc/letsencrypt
+      - ./nginx/www:/var/www/certbot
+      - ./nginx/certs:/workdir
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: /bin/sh
+    command: -lc "\
+      set -e; \
+      certbot certonly --webroot -w /var/www/certbot -d $HOST_FQDN --email support@quari.ai --agree-tos --non-interactive --keep-until-expiring --expand || true; \
+      cp /etc/letsencrypt/live/$HOST_FQDN/fullchain.pem /workdir/anythingllm.crt 2>/dev/null || true; \
+      cp /etc/letsencrypt/live/$HOST_FQDN/privkey.pem /workdir/anythingllm.key 2>/dev/null || true; \
+      docker kill -s HUP anythingllm-nginx 2>/dev/null || true; \
+      while true; do \
+        certbot renew --webroot -w /var/www/certbot --quiet || true; \
+        cp /etc/letsencrypt/live/$HOST_FQDN/fullchain.pem /workdir/anythingllm.crt 2>/dev/null || true; \
+        cp /etc/letsencrypt/live/$HOST_FQDN/privkey.pem /workdir/anythingllm.key 2>/dev/null || true; \
+        docker kill -s HUP anythingllm-nginx 2>/dev/null || true; \
+        sleep 12h; \
+      done"
     networks:
       - llm-net
 
