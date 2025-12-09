@@ -92,6 +92,7 @@ GID_VAL="$(id -g)"
 : "${TRT_MAX_NUM_TOKENS:=81696}"
 # Max prompt size 80000 tokens
 : "${TRT_FREE_MEM_FRACTION:=0.95}"
+LLM_BEARER_TOKEN="tensorrt_llm"
 
 # -------------------------------------------------------------------
 # ENV FILES
@@ -113,13 +114,18 @@ STORAGE_DIR=/app/server/storage
 
 # Use Generic OpenAI-compatible provider, backed by local TensorRT-LLM
 LLM_PROVIDER=generic-openai
-GENERIC_OPEN_AI_API_KEY=tensorrt_llm
+GENERIC_OPEN_AI_API_KEY=${LLM_BEARER_TOKEN}
 GENERIC_OPEN_AI_BASE_PATH=${OPENAI_API_BASE}
 GENERIC_OPEN_AI_MODEL_PREF=gpt-oss-120b
 # High ceilings so UI can down-tune per workspace
 GENERIC_OPEN_AI_MODEL_TOKEN_LIMIT=${TRT_MAX_SEQ_LEN}
 GENERIC_OPEN_AI_MAX_TOKENS=2000
 EOF
+
+# Store the shared bearer token for external clients (e.g., Copilot) using the public /v1 endpoint
+echo -n "${LLM_BEARER_TOKEN}" > llm_bearer.txt
+chmod 600 llm_bearer.txt
+echo "Saved LLM bearer token to 'llm_bearer.txt' (chmod 600)."
 
 echo "Created .env and anythingllm.env"
 
@@ -172,6 +178,16 @@ http {
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
+    }
+
+    # Public OpenAI-compatible endpoint -> local TRT-LLM proxy
+    location /v1/ {
+        proxy_pass http://trtllm-proxy:7000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_buffering off;
     }
 
     location / {
