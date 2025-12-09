@@ -83,7 +83,7 @@ GID_VAL="$(id -g)"
 # Long downloads/compiles happen on first gpt-oss-120b bring-up.
 : "${MAX_WAIT_MINUTES:=240}"   # 4 hours default
 : "${POLL_INTERVAL_SEC:=5}"
-: "${OPENAI_API_BASE:=http://trtllm-gpt-oss-120b:8000/v1}"
+: "${OPENAI_API_BASE:=http://trtllm-proxy:7000/v1}"
 # Empirische Grenze aus TRT-Log: max attention window 81696 Tokens
 : "${TRT_MAX_SEQ_LEN:=81696}"
 : "${TRT_MAX_NUM_TOKENS:=81696}"
@@ -187,6 +187,7 @@ EOF
 mkdir -p trtllm_cache
 mkdir -p anythingllm_data
 mkdir -p trtllm_cache/tiktoken_encodings
+mkdir -p proxy
 
 # Pre-download tiktoken vocab needed by Harmony (gpt-oss tokenizer)
 TIKTOKEN_DIR="trtllm_cache/tiktoken_encodings"
@@ -205,6 +206,109 @@ download_vocab() {
 
 download_vocab "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken" "$O200K_FILE"
 download_vocab "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken" "$CL100K_FILE"
+
+# -------------------------------------------------------------------
+# PROXY (context trim, future LB/queue hook)
+# -------------------------------------------------------------------
+cat > proxy/proxy_app.py <<'EOF'
+import os
+import json
+import tiktoken
+import requests
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+TARGET_BASE = os.getenv("TARGET_BASE", "http://trtllm-gpt-oss-120b:8000/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-oss-120b")
+MAX_CTX = int(os.getenv("MAX_CTX", "81696"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2000"))
+API_KEY = os.getenv("PROXY_API_KEY", "tensorrt_llm")
+
+enc = tiktoken.get_encoding("cl100k_base")
+app = FastAPI()
+
+
+def count_tokens(text: str) -> int:
+    return len(enc.encode(text))
+
+
+def trim_messages(messages):
+    joined = []
+    for m in messages:
+        role = m.get("role", "")
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = " ".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in content])
+        joined.append((role, content))
+    texts = [f"{r}: {c}" for r, c in joined]
+    full = "\n".join(texts)
+    total_tokens = count_tokens(full)
+    limit = MAX_CTX - MAX_TOKENS
+    if total_tokens <= limit:
+        return messages, total_tokens, total_tokens, 0
+    trimmed = []
+    acc_tokens = 0
+    for role, content in reversed(joined):
+        toks = count_tokens(f"{role}: {content}")
+        if acc_tokens + toks > limit:
+            available = limit - acc_tokens
+            if available > 0:
+                ids = enc.encode(f"{role}: {content}")
+                kept = enc.decode(ids[-available:])
+                trimmed.append({"role": role, "content": kept})
+                acc_tokens += available
+            break
+        else:
+            trimmed.append({"role": role, "content": content})
+            acc_tokens += toks
+    trimmed.reverse()
+    trimmed_tokens = acc_tokens
+    removed_tokens = max(total_tokens - trimmed_tokens, 0)
+    return trimmed, trimmed_tokens, total_tokens, removed_tokens
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(req: Request):
+    body = await req.json()
+    messages = body.get("messages", [])
+    max_tokens = int(body.get("max_tokens", MAX_TOKENS))
+    trimmed_messages, kept_tokens, original_tokens, removed_tokens = trim_messages(messages)
+    percent_of_ctx = round(kept_tokens / max(1, (MAX_CTX - max_tokens)) * 100, 2)
+    body["messages"] = trimmed_messages
+    body["model"] = body.get("model", MODEL_NAME)
+    body["max_tokens"] = max_tokens
+    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+    r = requests.post(f"{TARGET_BASE}/chat/completions", headers=headers, json=body, timeout=3600)
+    try:
+        resp_json = r.json()
+    except Exception:
+        resp_json = {"error": "invalid json from backend", "backend_text": r.text}
+    resp_json["proxy_token_usage"] = {
+        "prompt_tokens_original": original_tokens,
+        "prompt_tokens_kept": kept_tokens,
+        "prompt_tokens_trimmed": removed_tokens,
+        "max_context": MAX_CTX,
+        "max_tokens": max_tokens,
+        "prompt_window_percent_used": percent_of_ctx,
+    }
+    print(
+        f"[proxy] original={original_tokens} kept={kept_tokens} trimmed={removed_tokens} "
+        f"ctx={MAX_CTX} max_tokens={max_tokens} used={percent_of_ctx}% status={r.status_code}"
+    )
+    return JSONResponse(status_code=r.status_code, content=resp_json)
+
+
+@app.get("/v1/models")
+async def models():
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    r = requests.get(f"{TARGET_BASE}/models", headers=headers, timeout=30)
+    return JSONResponse(status_code=r.status_code, content=r.json())
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "target": TARGET_BASE}
+EOF
 
 # -------------------------------------------------------------------
 # DOCKER-COMPOSE (TRT-LLM + AnythingLLM + nginx)
@@ -263,6 +367,27 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - llm-net
+
+  trtllm-proxy:
+    image: python:3.11-slim
+    container_name: trtllm-proxy
+    restart: unless-stopped
+    depends_on:
+      - trtllm-gpt-oss-120b
+    ports:
+      - "127.0.0.1:7000:7000"
+    environment:
+      TARGET_BASE: http://trtllm-gpt-oss-120b:8000/v1
+      MODEL_NAME: openai/gpt-oss-120b
+      MAX_CTX: ${TRT_MAX_SEQ_LEN}
+      MAX_TOKENS: 2000
+      PROXY_API_KEY: tensorrt_llm
+    volumes:
+      - ./proxy_app.py:/app/proxy_app.py:ro
+    working_dir: /app
+    command: bash -lc "pip install --no-cache-dir fastapi uvicorn tiktoken requests && uvicorn proxy_app:app --host 0.0.0.0 --port 7000"
     networks:
       - llm-net
 
