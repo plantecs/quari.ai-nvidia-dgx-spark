@@ -23,6 +23,19 @@ cat <<'BANNER'
 BANNER
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$ROOT_DIR/.testenv"
+
+ensure_venv() {
+  if [[ ! -x "$VENV_DIR/bin/python3" ]]; then
+    python3 -m venv "$VENV_DIR"
+  fi
+  # shellcheck disable=SC1090
+  source "$VENV_DIR/bin/activate"
+  pip -q install --upgrade pip >/dev/null
+  pip -q install tiktoken requests fastapi uvicorn >/dev/null
+}
+
+ensure_venv
 HOST_FQDN=${HOST_FQDN:-$(grep -m1 '^HOST_FQDN=' "$ROOT_DIR/.env" 2>/dev/null | cut -d= -f2 || hostname -f)}
 BASE_URL="https://${HOST_FQDN}"
 LLM_URL="$BASE_URL"
@@ -32,8 +45,15 @@ LOCAL_UI="http://127.0.0.1"
 TOKEN_FILE="$ROOT_DIR/llm_bearer.txt"
 BEARER=$(cat "$TOKEN_FILE" 2>/dev/null || echo "tensorrt_llm")
 
+REACH_80="?"            # local curl check
+REACH_443="?"           # local curl check
+CERT_UI="?"
+CERT_V1="?"
+HOST_RESOLVES_PUBLIC="?"  # via public DNS
+TEST_RESULTS=()
+
 PROMPTS=(50000 60000 70000 79500)
-MAX_TOKENS=200
+MAX_TOKENS=2000
 MODEL="gpt-oss-120b"
 
 say() { echo "[$(date +%H:%M:%S)] $*"; }
@@ -62,14 +82,18 @@ check_ssl() {
   say "Checking HTTPS certificate (5s timeout)..."
   if curl -sS --fail --connect-timeout 5 --head "$BASE_URL" >/dev/null; then
     say "HTTPS OK (valid certificate)."
+    CERT_UI="yes"; CERT_V1="yes"; REACH_443="yes"
   else
+    CERT_UI="no"; CERT_V1="no"
     say "HTTPS check failed; retrying with -k..."
     if curl -sS -k --fail --connect-timeout 5 --head "$BASE_URL" >/dev/null; then
       say "HTTPS reachable with -k (likely self-signed)."
+      REACH_443="yes"
     else
       say "HTTPS unreachable; will fall back to local http for tests."
       LLM_URL="$LOCAL_LLM"
       UI_URL="$LOCAL_UI"
+      REACH_443="no"
     fi
   fi
 }
@@ -140,11 +164,43 @@ print(f"kept={kept} trimmed={trimmed} used_pct={used} finish={finish}")
 PY
 )
   echo "target=${target} http=${http_code} time_ms=${dur_ms} ${summary}"
+  TEST_RESULTS+=("${target}: http=${http_code}, ${dur_ms} ms, ${summary}")
   rm -f "$prompt_file" "$body_file" "$body_file.response"
+}
+
+check_ports() {
+  # DNS via public resolver (1.1.1.1)
+  local pub_ip
+  pub_ip=$(dig +short A @1.1.1.1 "$HOST_FQDN" | head -n1)
+  if [[ -n "$pub_ip" ]] && [[ ! "$pub_ip" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.|169\.254\.) ]]; then
+    HOST_RESOLVES_PUBLIC="yes"
+  else
+    HOST_RESOLVES_PUBLIC="no"
+  fi
+
+  local code80
+  code80=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://${HOST_FQDN}/" || echo "000")
+  if [[ "$code80" != "000" ]]; then REACH_80="yes"; else REACH_80="no"; fi
+}
+
+print_summary() {
+  local ok="✔" ko="✘"
+  echo
+  echo "==== SUMMARY ===="
+  echo "Public DNS A record:   ${HOST_RESOLVES_PUBLIC//yes/$ok}${HOST_RESOLVES_PUBLIC//no/$ko} ($HOST_RESOLVES_PUBLIC)"
+  echo "Port 80 reachable (local):  ${REACH_80//yes/$ok}${REACH_80//no/$ko} ($REACH_80)"
+  echo "Port 443 reachable (local): ${REACH_443//yes/$ok}${REACH_443//no/$ko} ($REACH_443)"
+  echo "TLS valid for UI:      ${CERT_UI//yes/$ok}${CERT_UI//no/$ko} (${CERT_UI})"
+  echo "TLS valid for /v1:     ${CERT_V1//yes/$ok}${CERT_V1//no/$ko} (${CERT_V1})"
+  echo "Token load tests:"
+  for line in "${TEST_RESULTS[@]}"; do
+    echo "  - ${line}"
+  done
 }
 
 main() {
   ensure_tiktoken
+  check_ports
   check_ssl
   check_anythingllm
   check_models
@@ -152,6 +208,7 @@ main() {
   for p in "${PROMPTS[@]}"; do
     run_test "$p"
   done
+  print_summary
 }
 
 main "$@"
