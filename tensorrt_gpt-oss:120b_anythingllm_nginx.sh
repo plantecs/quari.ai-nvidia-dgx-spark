@@ -5,6 +5,18 @@ trap 'echo "ERROR on line $LINENO: $BASH_COMMAND" >&2' ERR
 echo "==================================================================="
 echo " DGX Spark Setup: TensorRT-LLM (gpt-oss-120b) + AnythingLLM + HTTPS"
 echo "==================================================================="
+cat <<'BANNER'
+ ░▒▓██████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓██████▓▒░░▒▓███████▓▒░░▒▓█▓▒░       ░▒▓██████▓▒░░▒▓█▓▒░ 
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░ 
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░ 
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓████████▓▒░▒▓███████▓▒░░▒▓█▓▒░      ░▒▓████████▓▒░▒▓█▓▒░ 
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░ 
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░▒▓██▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░ 
+ ░▒▓██████▓▒░ ░▒▓██████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░▒▓██▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░ 
+   ░▒▓█▓▒░                                                                            
+    ░▒▓██▓▒░
+                       quari.ai | plantecs.ai | DGX Spark LLM
+BANNER
 echo
 echo "Brought to you by plantecs.ai / quari.ai — dedicated NVIDIA DGX Spark solutions."
 echo "Maintainer: Artur Brylka, CEO, plantecs Sp. z o.o. (Poland) — support@quari.ai"
@@ -368,7 +380,7 @@ services:
     restart: unless-stopped
     cap_add:
       - SYS_ADMIN
-    user: "${UID}:${GID}"
+    user: "${UID_VAL}:${GID_VAL}"
     env_file:
       - anythingllm.env
     environment:
